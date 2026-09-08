@@ -41,6 +41,16 @@ const versionTitle = computed(() => {
   if (!serverVersion.value) return `UI bundle ${clientCommit}; server version unavailable`;
   return `UI bundle: ${clientCommit}\nServer source: ${serverVersion.value.commit} (${serverVersion.value.branch})\nServer process: ${serverVersion.value.runningCommit}\nServer UI build: ${serverBuildCommit.value}\nBoot: ${serverVersion.value.bootId}`;
 });
+const pageTitle = computed(() => {
+  if (route.name === "chat") return "Chat workspace";
+  if (route.name === "models") return "Model library";
+  return "System dashboard";
+});
+const mobilePageTitle = computed(() => {
+  if (route.name === "chat") return "Chat";
+  if (route.name === "models") return "Models";
+  return "Dashboard";
+});
 const metricsTitle = computed(() => {
   const snapshot = system.info;
   if (!snapshot) return "Host telemetry unavailable";
@@ -141,9 +151,9 @@ function removeConversation(id: string): void {
       </div>
 
       <nav class="mt-5 space-y-1 px-3" aria-label="Workspace">
-        <RouterLink to="/" class="nav-link" @click="ui.setDrawer(false)"><span aria-hidden="true">⌁</span> Chat</RouterLink>
+        <RouterLink to="/" class="nav-link" @click="ui.setDrawer(false)"><span aria-hidden="true">◌</span> System</RouterLink>
+        <RouterLink to="/chat" class="nav-link" @click="ui.setDrawer(false)"><span aria-hidden="true">⌁</span> Chat</RouterLink>
         <RouterLink to="/models" class="nav-link" @click="ui.setDrawer(false)"><span aria-hidden="true">◈</span> Models</RouterLink>
-        <RouterLink to="/system" class="nav-link" @click="ui.setDrawer(false)"><span aria-hidden="true">◌</span> System</RouterLink>
       </nav>
 
       <div class="mt-7 flex min-h-0 flex-1 flex-col px-3">
@@ -177,21 +187,21 @@ function removeConversation(id: string): void {
     <div class="app-frame">
       <header class="topbar">
         <button class="icon-button lg:hidden" aria-label="Open navigation" @click="ui.setDrawer(true)">☰</button>
-        <div class="flex min-w-0 items-center gap-3">
+        <div class="topbar-brand flex min-w-0 items-center gap-3">
           <img class="brand-mark small" src="/icon.svg" alt="" aria-hidden="true" />
           <div class="min-w-0">
-            <p class="truncate text-sm font-semibold lg:hidden">Escarlet Local AI UI</p>
-            <p class="hidden text-sm font-medium text-muted lg:block">{{ route.name === 'chat' ? 'Chat workspace' : route.name === 'models' ? 'Model library' : 'System monitor' }}</p>
+            <p class="truncate text-sm font-semibold lg:hidden">{{ mobilePageTitle }}</p>
+            <p class="hidden text-sm font-medium text-muted lg:block">{{ pageTitle }}</p>
           </div>
         </div>
-        <div class="ml-auto flex items-center gap-2 sm:gap-3">
+        <div class="topbar-actions ml-auto flex items-center gap-2 sm:gap-3">
           <div class="host-metrics" :title="metricsTitle" aria-label="Host resource usage">
-            <span class="host-metric host-metric-priority"><span class="host-metric-label">CPU</span>{{ formatPercent(system.info?.cpu.usagePercent ?? null) }}</span>
-            <span class="host-metric"><span class="host-metric-label">RAM</span>{{ formatPercent(system.info?.memory.usagePercent ?? null) }}</span>
-            <span class="host-metric host-metric-priority"><span class="host-metric-label">VRAM</span>{{ formatPercent(system.vramUsagePercent) }}</span>
-            <span class="host-metric"><span class="host-metric-label">GPU</span>{{ formatPercent(system.primaryGpu?.usagePercent ?? null) }}</span>
+            <span class="host-metric"><span class="host-metric-label">CPU</span><span class="host-metric-value">{{ formatPercent(system.info?.cpu.usagePercent ?? null) }}</span></span>
+            <span class="host-metric"><span class="host-metric-label">RAM</span><span class="host-metric-value">{{ formatPercent(system.info?.memory.usagePercent ?? null) }}</span></span>
+            <span class="host-metric"><span class="host-metric-label">VRAM</span><span class="host-metric-value">{{ formatPercent(system.vramUsagePercent) }}</span></span>
+            <span class="host-metric"><span class="host-metric-label">GPU</span><span class="host-metric-value">{{ formatPercent(system.primaryGpu?.usagePercent ?? null) }}</span></span>
             <span class="host-metric nvidia-metric" :class="system.info?.nvidia.active ? 'nvidia-active' : system.info?.nvidia.present ? 'nvidia-idle' : 'nvidia-missing'">
-              <span class="host-metric-label">NV</span>{{ system.info?.nvidia.active ? 'On' : system.info?.nvidia.present ? 'Idle' : '—' }}
+              <span class="host-metric-label">NV</span><span class="host-metric-value">{{ system.info?.nvidia.active ? 'On' : system.info?.nvidia.present ? 'Idle' : '—' }}</span>
             </span>
           </div>
           <div class="hidden items-center gap-3 sm:flex" aria-label="Provider status">

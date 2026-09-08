@@ -6,8 +6,9 @@ import SystemView from "./views/SystemView.vue";
 export const router = createRouter({
   history: createWebHistory(),
   routes: [
-    { path: "/", name: "chat", component: ChatView },
+    { path: "/", name: "system", component: SystemView },
+    { path: "/chat", name: "chat", component: ChatView },
     { path: "/models", name: "models", component: ModelsView },
-    { path: "/system", name: "system", component: SystemView },
+    { path: "/system", redirect: "/" },
   ],
 });
