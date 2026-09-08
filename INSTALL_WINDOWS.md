@@ -256,20 +256,23 @@ UPDATE_TOKEN=un-token-largo-y-aleatorio
 UPDATE_BRANCH=master
 ```
 
-En **System → Remote updates**, escribe el token y pulsa **Check now**. Si hay commits nuevos, **Install and restart** ejecuta únicamente `git pull --ff-only`, `npm install --include=dev`, `npm run build` y solicita a WinSW su comando de auto-reinicio (`LocalAIRemote.exe restart!`). Aunque el servicio use `NODE_ENV=production`, el build necesita devDependencies como `vue-tsc` y Vite. El build genera `apps\web\dist\build-meta.json`; la UI sólo recarga después de confirmar una nueva instancia del proceso y que el proceso, el build y el commit esperado coinciden. Durante ese reinicio puede cortarse la petición HTTP: la interfaz lo tratará como una petición aceptada y esperará la confirmación. No se aceptan comandos arbitrarios desde el navegador.
+En **System → Remote updates**, escribe el token y pulsa **Check now**. Si hay commits nuevos, **Install and restart** ejecuta únicamente `git pull --ff-only`, `npm ci --include=dev`, `npm run build` y solicita a WinSW su comando de auto-reinicio (`LocalAIRemote.exe restart!`). Aunque el servicio use `NODE_ENV=production`, el build necesita devDependencies como `vue-tsc` y Vite. Si un `npm install` anterior dejó `package-lock.json` modificado, el actualizador lo restaura solo cuando ese (o `package.json`) es el único cambio tracked; otros cambios de código siguen bloqueando la actualización. El build genera `apps\web\dist\build-meta.json`; la UI sólo recarga después de confirmar una nueva instancia del proceso y que el proceso, el build y el commit esperado coinciden. Durante ese reinicio puede cortarse la petición HTTP: la interfaz lo tratará como una petición aceptada y esperará la confirmación. No se aceptan comandos arbitrarios desde el navegador.
 
 Si aparece `Mismatch`, no fuerces una recarga del navegador. Pulsa **Check now** otra vez: si el source ya está en el commit remoto pero el build quedó viejo, el estado mostrará que hace falta reconstruir y volverá a habilitar **Install and restart**. El error `spawn EINVAL` en Windows corresponde a instalaciones anteriores que intentaban ejecutar `npm.cmd` como si fuera un ejecutable nativo; el código actual lo ejecuta mediante el shell compatible. Si el servidor todavía está en una de esas versiones, hay que hacer esta primera actualización manual. Si el servicio no vuelve, revisa `Get-Service -Name LocalAIRemote` y los logs de `C:\Apps\escarlet-local-ai-ui\logs`. Para recuperar manualmente desde PowerShell como administrador:
 
 ```powershell
 Stop-Service -Name LocalAIRemote
 cd C:\Apps\escarlet-local-ai-ui
+git restore --worktree --source=HEAD -- package-lock.json
+git restore --staged -- package-lock.json
 git pull --ff-only origin master
-npm install --include=dev
+npm ci --include=dev
 npm run build
 Start-Service -Name LocalAIRemote
 Invoke-WebRequest -UseBasicParsing http://localhost:3000/api/version
 ```
 
+Si el actualizador se queja solo de `package-lock.json`, también puedes ejecutar `.\scripts\windows\restore-updater-lockfile.ps1` y volver a pulsar **Install and restart**.
 El repositorio debe tener el remoto Git configurado y la cuenta que ejecuta WinSW debe poder leerlo. Usa esta función sólo dentro de Tailscale; no publiques el puerto en Internet.
 
 ## 11. Acceder desde otra PC o iPhone con Tailscale

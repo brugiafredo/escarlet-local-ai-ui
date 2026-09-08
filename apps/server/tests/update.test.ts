@@ -68,23 +68,39 @@ describe("remote updater checkout safety", () => {
     ]);
   });
 
-  it("blocks a locally modified package-lock.json before pull and gives manual recovery guidance", async () => {
+  it("restores package-lock.json drift before pull and continues the update", async () => {
     const events: string[] = [];
+    let statusChecks = 0;
     const service = new UpdateService(config(await fixtureRoot()), {
       runningCommit: "old",
       runGit: async (args) => {
         events.push(`git ${args.join(" ")}`);
-        return "1 .M N... 100644 100644 100644 aaaaaaa aaaaaaa package-lock.json";
+        if (args[0] === "status") {
+          statusChecks += 1;
+          return statusChecks === 1
+            ? "1 .M N... 100644 100644 100644 aaaaaaa aaaaaaa package-lock.json"
+            : "";
+        }
+        return args[0] === "rev-parse" ? "a59036d" : "";
       },
       runNpm: async (args) => { events.push(`npm ${args.join(" ")}`); },
       scheduleRestart: () => { events.push("restart"); },
     });
 
-    await expect(service.update()).rejects.toThrow(/\.M package-lock\.json.*git status --short --untracked-files=no/);
-    expect(events).toEqual([statusCommand]);
-    expect(events).not.toContain("git pull --ff-only origin master");
-    expect(events.some((event) => event.startsWith("npm "))).toBe(false);
-    expect(events).not.toContain("restart");
+    await expect(service.update()).resolves.toMatchObject({ state: "restart-required" });
+    expect(events).toEqual([
+      statusCommand,
+      "git restore --worktree --source=HEAD -- package-lock.json",
+      "git restore --staged -- package-lock.json",
+      statusCommand,
+      "git pull --ff-only origin master",
+      "npm ci --include=dev",
+      statusCommand,
+      "npm run build",
+      statusCommand,
+      "git rev-parse --short HEAD",
+      "restart",
+    ]);
   });
 
   it("blocks another staged tracked path before pull", async () => {

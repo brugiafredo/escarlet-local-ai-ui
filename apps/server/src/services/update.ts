@@ -90,6 +90,14 @@ function trackedChangesDetail(changes: TrackedChange[]): string {
   return visible.join("; ");
 }
 
+/** npm may rewrite these on a host with a different npm version; they are safe to discard before pull. */
+const AUTO_RESTORABLE_BEFORE_PULL = new Set(["package-lock.json", "package.json"]);
+
+function isAutoRestorableBeforePull(change: TrackedChange): boolean {
+  const normalized = change.path.replace(/\\/g, "/");
+  return AUTO_RESTORABLE_BEFORE_PULL.has(normalized);
+}
+
 export class UpdateService {
   private readonly config: AppConfig;
   private readonly dependencies: UpdateServiceDependencies;
@@ -173,8 +181,28 @@ export class UpdateService {
         502,
       );
     }
-    const changes = parseTrackedChanges(output);
+    let changes = parseTrackedChanges(output);
     if (changes.length === 0) return;
+
+    if (phase === "before pull" && changes.every(isAutoRestorableBeforePull)) {
+      const paths = [...new Set(changes.map((change) => change.path.replace(/\\/g, "/")))];
+      try {
+        // Discard host-local npm lockfile drift so a previous `npm install` cannot
+        // permanently block remote updates. Source edits still fail closed below.
+        await this.git(["restore", "--worktree", "--source=HEAD", "--", ...paths]);
+        await this.git(["restore", "--staged", "--", ...paths]);
+        output = await this.git(["status", "--porcelain=v2", "--untracked-files=no", "--ignore-submodules=none"]);
+        changes = parseTrackedChanges(output);
+        if (changes.length === 0) return;
+      } catch (error) {
+        const detail = updateErrorDetail(error);
+        throw new AppError(
+          "UPDATE_FAILED",
+          `Update blocked before pulling because package-lock drift could not be restored automatically (${trackedChangesDetail(changes)})${detail ? `: ${detail}` : "."}`,
+          409,
+        );
+      }
+    }
 
     const action = phase === "before pull" ? "before pulling" : "before restarting";
     throw new AppError(
