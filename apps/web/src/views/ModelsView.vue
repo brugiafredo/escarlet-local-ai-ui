@@ -6,7 +6,8 @@ import ModelCapabilities from "../components/ModelCapabilities.vue";
 
 const app = useAppStore();
 const ollamaModelName = ref("");
-const downloading = ref(false);
+const lmStudioModelName = ref("");
+const downloading = ref<"ollama" | "lmstudio" | null>(null);
 const groups = computed(() => [
   { id: "lmstudio" as const, name: "LM Studio", description: "Local models managed by LM Studio", models: app.models.filter((model) => model.provider === "lmstudio") },
   { id: "ollama" as const, name: "Ollama", description: "Models installed in your Ollama library", models: app.models.filter((model) => model.provider === "ollama") },
@@ -21,16 +22,32 @@ function providerOnline(id: ProviderId): boolean {
 }
 async function downloadOllama(): Promise<void> {
   if (!ollamaModelName.value.trim() || downloading.value) return;
-  downloading.value = true;
+  downloading.value = "ollama";
   try {
     await app.downloadOllamaModel(ollamaModelName.value);
     ollamaModelName.value = "";
   } finally {
-    downloading.value = false;
+    downloading.value = null;
+  }
+}
+async function downloadLmStudio(): Promise<void> {
+  if (!lmStudioModelName.value.trim() || downloading.value) return;
+  downloading.value = "lmstudio";
+  try {
+    await app.downloadLmStudioModel(lmStudioModelName.value);
+    lmStudioModelName.value = "";
+  } finally {
+    downloading.value = null;
   }
 }
 function deleteModel(model: ModelInfo): void {
-  if (window.confirm(`Delete ${model.name} from Ollama? This removes the local model files.`)) void app.deleteOllamaModel(model);
+  const label = model.provider === "ollama" ? "Ollama" : "LM Studio";
+  if (!window.confirm(`Delete ${model.name} from ${label}? This removes the local model files.`)) return;
+  if (model.provider === "ollama") void app.deleteOllamaModel(model);
+  else void app.deleteLmStudioModel(model);
+}
+function canDelete(model: ModelInfo): boolean {
+  return model.deletable === true || model.provider === "ollama" || model.provider === "lmstudio";
 }
 function formatSize(bytes?: number): string {
   if (!bytes) return "Size unavailable";
@@ -45,7 +62,7 @@ function formatSize(bytes?: number): string {
 <template>
   <section class="page-shell">
     <div class="page-heading">
-      <div><p class="eyebrow">Control center</p><h1>Models</h1><p class="page-subtitle">See what is installed, what is warm, and what is ready to use.</p></div>
+      <div><p class="eyebrow">Control centre</p><h1>Models</h1><p class="page-subtitle">See what is installed, what is warm, and what is ready to use.</p></div>
       <button class="secondary-button" :disabled="app.loadingModels" @click="app.refresh"><span :class="{ spin: app.loadingModels }" aria-hidden="true">↻</span> Refresh</button>
     </div>
     <div class="space-y-8">
@@ -58,13 +75,17 @@ function formatSize(bytes?: number): string {
             <ModelCapabilities :model="model" />
             <div class="mt-4 flex items-center gap-3 text-[11px] text-muted"><span v-if="model.size">{{ formatSize(model.size) }}</span><span v-if="model.contextLength">{{ model.contextLength.toLocaleString() }} ctx</span><span v-if="!model.size && !model.contextLength">Discovered from provider</span></div>
             <button class="action-button mt-5 w-full" :class="model.loaded ? 'unload' : 'load'" :disabled="app.isBusy(model) || !providerOnline(model.provider)" @click="modelAction(model)"><span v-if="app.isBusy(model)" class="spin" aria-hidden="true">◌</span><span v-else aria-hidden="true">{{ model.loaded ? '↓' : '↑' }}</span>{{ app.isBusy(model) ? (model.loaded ? 'Unloading…' : 'Loading…') : (model.loaded ? 'Unload model' : 'Load model') }}</button>
-            <button v-if="model.provider === 'ollama'" class="text-button mt-3 w-full text-center" :disabled="app.isBusy(model) || !providerOnline(model.provider)" @click="deleteModel(model)">{{ app.isBusy(model) && app.actionOperation === 'delete' ? 'Deleting…' : 'Delete from Ollama' }}</button>
+            <button v-if="canDelete(model)" class="text-button mt-3 w-full text-center" :disabled="app.isBusy(model) || !providerOnline(model.provider)" @click="deleteModel(model)">{{ app.isBusy(model) && app.actionOperation === 'delete' ? 'Deleting…' : `Delete from ${group.name}` }}</button>
           </article>
         </div>
         <div v-else class="empty-provider"><span aria-hidden="true">◌</span><div><p>{{ providerOnline(group.id) ? 'No models discovered yet' : `${group.name} is offline` }}</p><span>{{ providerOnline(group.id) ? 'Refresh to check for newly available models.' : 'Start the provider or update its URL in .env.' }}</span></div></div>
+        <form v-if="group.id === 'lmstudio'" class="download-card download-card-lmstudio" @submit.prevent="downloadLmStudio">
+          <div><p class="font-semibold">Add an LM Studio model</p><p class="mt-1 text-xs text-muted">Enter a catalog key or Hugging Face URL, for example <code>ibm/granite-4-micro</code> or <code>https://huggingface.co/lmstudio-community/gpt-oss-20b-GGUF</code>.</p></div>
+          <div class="download-row"><label class="sr-only" for="lmstudio-model-name">LM Studio model key</label><input id="lmstudio-model-name" v-model="lmStudioModelName" class="model-input" placeholder="publisher/model" :disabled="!providerOnline('lmstudio') || downloading === 'lmstudio'" /><button class="primary-button" type="submit" :disabled="!providerOnline('lmstudio') || downloading === 'lmstudio' || !lmStudioModelName.trim()">{{ downloading === 'lmstudio' ? 'Downloading…' : 'Download model' }}</button></div>
+        </form>
         <form v-if="group.id === 'ollama'" class="download-card" @submit.prevent="downloadOllama">
           <div><p class="font-semibold">Add an Ollama model</p><p class="mt-1 text-xs text-muted">Enter any model name from the Ollama library, for example <code>llama3.2</code> or <code>qwen2.5:7b</code>.</p></div>
-          <div class="download-row"><label class="sr-only" for="ollama-model-name">Ollama model name</label><input id="ollama-model-name" v-model="ollamaModelName" class="model-input" placeholder="model:tag" :disabled="!providerOnline('ollama') || downloading" /><button class="primary-button" type="submit" :disabled="!providerOnline('ollama') || downloading || !ollamaModelName.trim()">{{ downloading ? 'Downloading…' : 'Download model' }}</button></div>
+          <div class="download-row"><label class="sr-only" for="ollama-model-name">Ollama model name</label><input id="ollama-model-name" v-model="ollamaModelName" class="model-input" placeholder="model:tag" :disabled="!providerOnline('ollama') || downloading === 'ollama'" /><button class="primary-button" type="submit" :disabled="!providerOnline('ollama') || downloading === 'ollama' || !ollamaModelName.trim()">{{ downloading === 'ollama' ? 'Downloading…' : 'Download model' }}</button></div>
         </form>
       </section>
     </div>

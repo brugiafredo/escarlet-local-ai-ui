@@ -2,12 +2,14 @@
 import { computed, onMounted, onUnmounted, ref } from "vue";
 import { api, ApiError } from "../services/api";
 import { updateServiceWorker } from "../services/pwa";
+import { useSystemStore } from "../stores/system";
 import { useUiStore } from "../stores/ui";
-import type { ServerVersion, SystemInfo, UpdateStatus } from "../types";
+import type { ServerVersion, UpdateStatus } from "../types";
 
 const ui = useUiStore();
-const info = ref<SystemInfo | null>(null);
-const loading = ref(true);
+const system = useSystemStore();
+const info = computed(() => system.info);
+const loading = computed(() => system.loading && !system.info);
 const update = ref<UpdateStatus | null>(null);
 const updateBusy = ref(false);
 const restartBusy = ref(false);
@@ -25,23 +27,19 @@ const versionState = computed<"synced" | "mismatch" | "unavailable">(() => {
   const processMatchesBuild = serverRunningCommit.value === serverBuildCommit.value || serverRunningCommit.value.startsWith(serverBuildCommit.value) || serverBuildCommit.value.startsWith(serverRunningCommit.value);
   return uiMatchesBuild && processMatchesBuild ? "synced" : "mismatch";
 });
+const nvidiaStatus = computed(() => {
+  if (!info.value) return { label: "Checking…", detail: "Waiting for the first host snapshot.", tone: "muted" as const };
+  if (!info.value.nvidia.present) return { label: "No NVIDIA GPU", detail: "nvidia-smi did not report an adapter on this host.", tone: "muted" as const };
+  if (info.value.nvidia.active) return { label: "NVIDIA in use", detail: "VRAM or GPU utilisation shows active work, which usually means a loaded model is on the GPU.", tone: "active" as const };
+  return { label: "NVIDIA idle", detail: "An NVIDIA GPU is present, but current VRAM and utilisation look idle.", tone: "idle" as const };
+});
 const updateReloadDelayMs = 5_000;
-let timer: number | undefined;
 let updateTimer: number | undefined;
 
 function sleep(milliseconds: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
 }
 
-async function refresh(): Promise<void> {
-  try {
-    info.value = await api.system();
-  } catch (error) {
-    if (!info.value) ui.showToast(error instanceof ApiError ? error.message : "Unable to read system information", "error");
-  } finally {
-    loading.value = false;
-  }
-}
 async function refreshUpdate(): Promise<void> {
   try { update.value = await api.updateStatus(); } catch { update.value = null; }
 }
@@ -139,9 +137,16 @@ async function restartService(): Promise<void> {
     restartBusy.value = false;
   }
 }
-onMounted(async () => { await refresh(); timer = window.setInterval(() => void refresh(), 5_000); });
-onMounted(() => { void refreshUpdate(); void refreshVersion(); updateTimer = window.setInterval(() => { void refreshUpdate(); void refreshVersion(); }, 60_000); });
-onUnmounted(() => { if (timer !== undefined) window.clearInterval(timer); if (updateTimer !== undefined) window.clearInterval(updateTimer); });
+onMounted(() => {
+  system.startPolling(3_000);
+  void refreshUpdate();
+  void refreshVersion();
+  updateTimer = window.setInterval(() => { void refreshUpdate(); void refreshVersion(); }, 60_000);
+});
+onUnmounted(() => {
+  system.stopPolling();
+  if (updateTimer !== undefined) window.clearInterval(updateTimer);
+});
 function formatBytes(bytes: number | null): string {
   if (bytes === null) return "—";
   const units = ["B", "KB", "MB", "GB", "TB"];
@@ -154,11 +159,15 @@ function formatUptime(seconds: number | null): string {
   const days = Math.floor(seconds / 86400); const hours = Math.floor((seconds % 86400) / 3600); const minutes = Math.floor((seconds % 3600) / 60);
   return days ? `${days}d ${hours}h ${minutes}m` : `${hours}h ${minutes}m`;
 }
+function vramPercent(used: number | null, total: number | null): number {
+  if (used === null || !total) return 0;
+  return Math.min(100, Number(((used / total) * 100).toFixed(1)));
+}
 </script>
 
 <template>
   <section class="page-shell">
-    <div class="page-heading"><div><p class="eyebrow">Read-only telemetry</p><h1>System</h1><p class="page-subtitle">A lightweight view of the machine hosting your local models.</p></div><span class="live-indicator"><span class="pulse-dot" /> updates every 5 seconds</span></div>
+    <div class="page-heading"><div><p class="eyebrow">Read-only telemetry</p><h1>System</h1><p class="page-subtitle">A live view of CPU, memory, VRAM, and whether NVIDIA is doing the work.</p></div><span class="live-indicator"><span class="pulse-dot" /> updates every 3 seconds</span></div>
     <div v-if="loading && !info" class="skeleton-grid"><div v-for="n in 4" :key="n" class="skeleton-card" /></div>
     <template v-else-if="info">
       <div class="system-grid">
@@ -166,7 +175,20 @@ function formatUptime(seconds: number | null): string {
         <article class="metric-card"><div class="metric-top"><span class="metric-label">CPU</span><span class="metric-symbol" aria-hidden="true">⌁</span></div><div class="metric-value">{{ info.cpu.usagePercent === null ? '—' : `${info.cpu.usagePercent}%` }}</div><p class="metric-foot">{{ info.cpu.cores === null ? 'Core count unavailable' : `${info.cpu.cores} logical cores` }}</p></article>
         <article class="metric-card"><div class="metric-top"><span class="metric-label">Uptime</span><span class="metric-symbol" aria-hidden="true">◷</span></div><div class="metric-value">{{ formatUptime(info.uptimeSeconds) }}</div><p class="metric-foot">Since last system boot</p></article>
       </div>
-      <section class="system-section"><div class="section-heading-row"><div><h2 class="section-heading">Graphics</h2><p class="text-xs text-muted">Detected adapters and reported memory.</p></div></div><div v-if="info.gpu.length" class="gpu-grid"><article v-for="gpu in info.gpu" :key="gpu.name" class="gpu-card"><div class="gpu-icon" aria-hidden="true">▰</div><div class="min-w-0"><h3 class="truncate font-semibold" :title="gpu.name">{{ gpu.name }}</h3><p class="mt-1 text-xs text-muted">{{ formatBytes(gpu.memoryUsedBytes) }} used · {{ formatBytes(gpu.memoryTotalBytes) }} total</p></div></article></div><div v-else class="empty-provider"><span aria-hidden="true">◌</span><div><p>No graphics adapter data reported</p><span>The operating system did not expose GPU telemetry.</span></div></div></section>
+      <section class="system-section">
+        <div class="section-heading-row"><div><h2 class="section-heading">NVIDIA status</h2><p class="text-xs text-muted">Quick answer for whether models appear to be using the NVIDIA GPU.</p></div></div>
+        <article class="nvidia-card" :class="`nvidia-${nvidiaStatus.tone}`">
+          <div class="nvidia-card-top">
+            <div>
+              <p class="metric-label">Graphics path</p>
+              <p class="mt-2 text-lg font-semibold">{{ nvidiaStatus.label }}</p>
+              <p class="mt-1 text-xs text-muted">{{ nvidiaStatus.detail }}</p>
+            </div>
+            <span class="status-pill" :class="info.nvidia.active ? 'status-online' : 'status-offline'">{{ info.nvidia.source === 'nvidia-smi' ? 'nvidia-smi' : info.nvidia.source }}</span>
+          </div>
+        </article>
+      </section>
+      <section class="system-section"><div class="section-heading-row"><div><h2 class="section-heading">Graphics</h2><p class="text-xs text-muted">Detected adapters with utilisation and VRAM when available.</p></div></div><div v-if="info.gpu.length" class="gpu-grid"><article v-for="gpu in info.gpu" :key="gpu.name" class="gpu-card" :class="{ 'gpu-active': gpu.active }"><div class="gpu-icon" aria-hidden="true">▰</div><div class="min-w-0 flex-1"><div class="flex items-start justify-between gap-3"><h3 class="truncate font-semibold" :title="gpu.name">{{ gpu.name }}</h3><span class="load-badge" :class="gpu.active ? 'loaded' : 'unloaded'"><span class="status-dot" :class="gpu.active ? 'online' : 'offline'" />{{ gpu.active ? 'Active' : 'Idle' }}</span></div><p class="mt-1 text-xs text-muted">{{ gpu.nvidia ? 'NVIDIA' : (gpu.vendor || 'GPU') }} · {{ gpu.usagePercent === null ? 'Utilisation unavailable' : `${gpu.usagePercent}% GPU` }}</p><div class="progress-track"><div class="progress-fill teal" :style="{ width: `${vramPercent(gpu.memoryUsedBytes, gpu.memoryTotalBytes)}%` }" /></div><p class="mt-2 text-xs text-muted">{{ formatBytes(gpu.memoryUsedBytes) }} used · {{ formatBytes(gpu.memoryTotalBytes) }} total VRAM</p></div></article></div><div v-else class="empty-provider"><span aria-hidden="true">◌</span><div><p>No graphics adapter data reported</p><span>The operating system did not expose GPU telemetry.</span></div></div></section>
       <section class="system-section"><div class="section-heading-row"><div><h2 class="section-heading">Host</h2><p class="text-xs text-muted">Environment details for this Escarlet Local AI UI server.</p></div></div><div class="host-card"><div><span class="metric-label">Operating system</span><p class="mt-2 font-medium">{{ info.operatingSystem }}</p></div><div><span class="metric-label">Last updated</span><p class="mt-2 font-medium">{{ new Date(info.capturedAt).toLocaleTimeString() }}</p></div></div></section>
       <section class="system-section"><div class="section-heading-row"><div><h2 class="section-heading">Build identity</h2><p class="text-xs text-muted">Use this to confirm that the browser bundle and compiled UI served by the server come from the same commit.</p></div></div><div class="version-grid"><article class="metric-card"><span class="metric-label">UI bundle</span><p class="metric-value version-value" :title="clientCommit">{{ clientShortCommit }}</p></article><article class="metric-card"><span class="metric-label">Server UI build</span><p class="metric-value version-value" :title="serverBuildCommit">{{ serverBuildShortCommit }}</p><p class="metric-foot">Running {{ serverRunningShortCommit }} · source {{ serverVersion?.shortCommit || 'unavailable' }} · {{ serverVersion?.branch || 'version endpoint unavailable' }}</p></article><article class="metric-card"><span class="metric-label">Status</span><p class="metric-value version-value" :class="versionState === 'synced' ? 'version-ok' : versionState === 'mismatch' ? 'version-warning' : ''">{{ versionState === 'synced' ? 'Synced' : versionState === 'mismatch' ? 'Mismatch' : 'Unknown' }}</p><p class="metric-foot">{{ serverVersion?.startedAt ? `Started ${new Date(serverVersion.startedAt).toLocaleString()}` : 'Refresh to check again' }}</p></article></div></section>
       <section class="system-section update-section"><div class="section-heading-row"><div><h2 class="section-heading">Remote updates</h2><p class="text-xs text-muted">Safely pull, build, restart, and verify this service from the UI when enabled in .env.</p></div></div><article class="update-card"><div class="flex min-w-0 items-start justify-between gap-4"><div><p class="metric-label">Status</p><p class="mt-2 font-medium">{{ update?.message || 'Checking update configuration…' }}</p><p v-if="update?.currentVersion" class="mt-1 text-xs text-muted">Source: {{ update.currentVersion }}<span v-if="update.buildVersion"> · UI build: {{ update.buildVersion.slice(0, 12) }}</span><span v-if="update.latestVersion"> · Remote: {{ update.latestVersion }}</span></p></div><span v-if="update" class="status-pill" :class="update.state === 'available' ? 'status-online' : 'status-offline'">{{ update.state }}</span></div><div v-if="update?.enabled && update.requiresToken" class="mt-4"><label class="field-label">Update token <input v-model="updateToken" type="password" autocomplete="off" placeholder="Configured in UPDATE_TOKEN" /></label></div><div class="mt-4 flex flex-wrap gap-2"><button class="secondary-button" :disabled="updateBusy || restartBusy || !update?.enabled" @click="checkForUpdate">{{ updateBusy ? 'Checking…' : 'Check now' }}</button><button v-if="update?.state === 'available'" class="primary-button" :disabled="updateBusy || restartBusy" @click="installUpdate">{{ updateBusy ? 'Updating…' : 'Install and restart' }}</button><button class="secondary-button" :disabled="updateBusy || restartBusy || !update?.enabled" @click="restartService">{{ restartBusy ? 'Restarting…' : 'Restart service' }}</button></div></article></section>

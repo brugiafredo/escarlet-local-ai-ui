@@ -97,6 +97,17 @@ export interface Conversation {
   sharedWith?: string[];
 }
 
+export interface GpuInfo {
+  name: string;
+  vendor: string | null;
+  nvidia: boolean;
+  memoryUsedBytes: number | null;
+  memoryTotalBytes: number | null;
+  usagePercent: number | null;
+  /** True when utilisation or VRAM suggests the GPU is doing meaningful work. */
+  active: boolean;
+}
+
 export interface SystemInfo {
   cpu: {
     usagePercent: number | null;
@@ -107,12 +118,12 @@ export interface SystemInfo {
     totalBytes: number | null;
     usagePercent: number | null;
   };
-  gpu: Array<{
-    name: string;
-    memoryUsedBytes: number | null;
-    memoryTotalBytes: number | null;
-    usagePercent: number | null;
-  }>;
+  gpu: GpuInfo[];
+  nvidia: {
+    present: boolean;
+    active: boolean;
+    source: "nvidia-smi" | "system" | "none";
+  };
   operatingSystem: string;
   uptimeSeconds: number | null;
   capturedAt: string;

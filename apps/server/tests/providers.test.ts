@@ -12,18 +12,18 @@ describe("provider model normalization", () => {
         context_length: 8192,
       }],
     });
-    expect(models).toEqual([{ provider: "lmstudio", id: "local/model", name: "Local Model", loaded: true, contextLength: 8192, instanceId: "instance-1" }]);
+    expect(models).toEqual([{ provider: "lmstudio", id: "local/model", name: "Local Model", loaded: true, deletable: true, contextLength: 8192, instanceId: "instance-1" }]);
   });
 
   it("supports the current LM Studio v1 key field", () => {
     expect(normalizeLMStudioModels({ models: [{ key: "qwen/qwen3.5-27b", display_name: "Qwen 3.5 27B" }] })).toEqual([
-      { provider: "lmstudio", id: "qwen/qwen3.5-27b", name: "Qwen 3.5 27B", loaded: false },
+      { provider: "lmstudio", id: "qwen/qwen3.5-27b", name: "Qwen 3.5 27B", loaded: false, deletable: true },
     ]);
   });
 
   it("normalizes vision, tool, and reasoning capabilities from LM Studio", () => {
     expect(normalizeLMStudioModels({ models: [{ key: "google/gemma-4", capabilities: { vision: true, trained_for_tool_use: true, reasoning: { allowed_options: ["on"] } } }] })).toEqual([
-      { provider: "lmstudio", id: "google/gemma-4", name: "google/gemma-4", loaded: false, capabilities: ["vision", "tools", "reasoning"] },
+      { provider: "lmstudio", id: "google/gemma-4", name: "google/gemma-4", loaded: false, deletable: true, capabilities: ["vision", "tools", "reasoning"] },
     ]);
   });
 
@@ -196,6 +196,27 @@ describe("offline provider handling", () => {
       expect(requestUrl).toBe("http://lmstudio.test/v1/chat/completions");
       expect(JSON.parse(requestBody)).toMatchObject({ model: "local/model", stream: false, tool_choice: "auto", tools: [{ type: "function", function: { name: "list_local_models" } }] });
       expect(chunks).toEqual([{ text: "", toolCalls: [{ id: "call-2", name: "list_local_models", arguments: "{}" }] }, { text: "", done: true }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("downloads an LM Studio model and waits for the job to complete", async () => {
+    const originalFetch = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (input) => {
+      urls.push(String(input));
+      if (urls.length === 1) {
+        return new Response(JSON.stringify({ job_id: "job_1", status: "downloading", total_size_bytes: 100 }), { headers: { "content-type": "application/json" } });
+      }
+      return new Response(JSON.stringify({ job_id: "job_1", status: "completed", downloaded_bytes: 100, total_size_bytes: 100 }), { headers: { "content-type": "application/json" } });
+    }) as typeof fetch;
+    try {
+      await new LMStudioProvider("http://lmstudio.test").downloadModel("ibm/granite-4-micro");
+      expect(urls).toEqual([
+        "http://lmstudio.test/api/v1/models/download",
+        "http://lmstudio.test/api/v1/models/download/status/job_1",
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

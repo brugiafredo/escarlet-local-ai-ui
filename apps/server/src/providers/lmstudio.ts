@@ -1,6 +1,81 @@
+import { execFile } from "node:child_process";
+import { promises as fs } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { promisify } from "node:util";
 import { AppError, ProviderOfflineError } from "../errors";
 import { fetchWithTimeout, isRecord, numberValue, readJson, stringValue } from "../http";
 import type { AIProvider, ChatChunk, ChatRequest, ChatToolCall, ModelCapability, ModelInfo, ProviderStatus } from "../types";
+
+const execFileAsync = promisify(execFile);
+const DOWNLOAD_POLL_MS = 2_000;
+const DOWNLOAD_TIMEOUT_MS = 30 * 60_000;
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function resolveLmStudioModelsDir(): Promise<string> {
+  const configured = process.env.LM_STUDIO_MODELS_DIR?.trim();
+  if (configured) return path.resolve(configured);
+  const home = os.homedir();
+  const settingsPath = path.join(home, ".lmstudio", "settings.json");
+  try {
+    const raw = await fs.readFile(settingsPath, "utf8");
+    const settings = JSON.parse(raw) as unknown;
+    if (isRecord(settings)) {
+      const folder = stringValue(settings.downloadsFolder) ?? stringValue(settings.modelsPath) ?? stringValue(settings.models_path);
+      if (folder) return path.resolve(folder);
+    }
+  } catch {
+    // Fall back to the default LM Studio models folder.
+  }
+  return path.join(home, ".lmstudio", "models");
+}
+
+function modelDiskPath(modelsDir: string, modelKey: string): string {
+  const withoutVariant = modelKey.split("@")[0] ?? modelKey;
+  const segments = withoutVariant.split(/[/\\]+/).map((segment) => segment.trim()).filter((segment) => segment && segment !== "." && segment !== "..");
+  if (segments.length === 0) {
+    throw new AppError("VALIDATION_ERROR", "Enter a valid LM Studio model key", 400);
+  }
+  const root = path.resolve(modelsDir);
+  const target = path.resolve(root, ...segments);
+  const prefix = root.endsWith(path.sep) ? root : `${root}${path.sep}`;
+  if (target !== root && !target.startsWith(prefix)) {
+    throw new AppError("VALIDATION_ERROR", "Refusing to delete a path outside the LM Studio models folder", 400);
+  }
+  return target;
+}
+
+async function removeWithLmsCli(model: string): Promise<boolean> {
+  try {
+    await execFileAsync("lms", ["remove", model, "-y"], { timeout: 120_000, windowsHide: true, encoding: "utf8" });
+    return true;
+  } catch {
+    try {
+      await execFileAsync("lms", ["rm", model, "-y"], { timeout: 120_000, windowsHide: true, encoding: "utf8" });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function removeEmptyParents(startPath: string, stopAt: string): Promise<void> {
+  let current = path.dirname(startPath);
+  const root = path.resolve(stopAt);
+  while (current.startsWith(root) && current !== root) {
+    try {
+      const entries = await fs.readdir(current);
+      if (entries.length > 0) return;
+      await fs.rmdir(current);
+      current = path.dirname(current);
+    } catch {
+      return;
+    }
+  }
+}
 
 interface InternalModel extends ModelInfo {
   instanceId?: string;
@@ -102,6 +177,7 @@ export function normalizeLMStudioModels(payload: unknown): InternalModel[] {
       id,
       name: stringValue(item.display_name) ?? stringValue(item.name) ?? id,
       loaded: hasLoadedState(item, instances),
+      deletable: true,
     };
     const capabilities = modelCapabilities(item);
     if (capabilities.length > 0) model.capabilities = capabilities;
@@ -425,12 +501,69 @@ export class LMStudioProvider implements AIProvider {
     await readJson(response);
   }
 
-  async downloadModel(_model: string): Promise<void> {
-    throw new AppError("MODEL_ACTION_UNSUPPORTED", "LM Studio model downloads are managed by the LM Studio application", 405);
+  async downloadModel(model: string): Promise<void> {
+    const baseUrl = this.requireUrl();
+    const response = await fetchWithTimeout(`${baseUrl}/api/v1/models/download`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model }),
+    }, 60_000);
+    const payload = await readJson(response);
+    if (!isRecord(payload)) {
+      throw new AppError("PROVIDER_ERROR", "LM Studio returned an invalid download response", 502);
+    }
+    const status = stringValue(payload.status);
+    if (status === "already_downloaded" || status === "completed") {
+      return;
+    }
+    const jobId = stringValue(payload.job_id) ?? stringValue(payload.jobId);
+    if (!jobId) {
+      if (status === "failed") {
+        throw new AppError("PROVIDER_ERROR", "LM Studio failed to start the model download", 502);
+      }
+      return;
+    }
+    const deadline = Date.now() + DOWNLOAD_TIMEOUT_MS;
+    while (Date.now() < deadline) {
+      const statusResponse = await fetchWithTimeout(`${baseUrl}/api/v1/models/download/status/${encodeURIComponent(jobId)}`, {}, 15_000);
+      const statusPayload = await readJson(statusResponse);
+      if (!isRecord(statusPayload)) {
+        throw new AppError("PROVIDER_ERROR", "LM Studio returned an invalid download status", 502);
+      }
+      const jobStatus = stringValue(statusPayload.status);
+      if (jobStatus === "completed" || jobStatus === "already_downloaded") {
+        return;
+      }
+      if (jobStatus === "failed") {
+        const detail = stringValue(statusPayload.error) ?? stringValue(statusPayload.message) ?? "LM Studio download failed";
+        throw new AppError("PROVIDER_ERROR", detail, 502);
+      }
+      await sleep(DOWNLOAD_POLL_MS);
+    }
+    throw new AppError("PROVIDER_ERROR", `Timed out while downloading ${model} from LM Studio`, 504);
   }
 
-  async deleteModel(_model: string): Promise<void> {
-    throw new AppError("MODEL_ACTION_UNSUPPORTED", "LM Studio model deletion is managed by the LM Studio application", 405);
+  async deleteModel(model: string): Promise<void> {
+    const models = await this.listModels() as InternalModel[];
+    const target = models.find((candidate) => candidate.id === model);
+    if (!target) {
+      throw new AppError("MODEL_NOT_FOUND", `${model} was not found in LM Studio`, 404);
+    }
+    if (target.loaded) {
+      await this.unloadModel(model);
+    }
+    if (await removeWithLmsCli(model)) {
+      return;
+    }
+    const modelsDir = await resolveLmStudioModelsDir();
+    const diskPath = modelDiskPath(modelsDir, model);
+    try {
+      await fs.access(diskPath);
+    } catch {
+      throw new AppError("MODEL_NOT_FOUND", `Could not find local files for ${model} under ${modelsDir}`, 404);
+    }
+    await fs.rm(diskPath, { recursive: true, force: true });
+    await removeEmptyParents(diskPath, modelsDir);
   }
 
   async *chat(request: ChatRequest): AsyncIterable<ChatChunk> {

@@ -112,7 +112,7 @@ To remove the service without deleting the project:
 - Ollama uses `/api/tags`, `/api/ps`, and `/api/chat`. Loading keeps a model alive with `keep_alive: -1`; unloading sends `keep_alive: 0`.
 - `/api/models` combines whichever providers respond. Offline providers do not prevent the remaining provider from being used.
 - LM Studio models are identified using the current v1 `key` field. An unloaded LM Studio model can be sent a first chat request and LM Studio can auto-load it; Ollama models still use explicit keep-alive load/unload actions.
-- Ollama model downloads and deletion are available from the Models page. LM Studio downloads and deletion remain managed by the LM Studio application.
+- Ollama and LM Studio model downloads and deletion are available from the Models page.
 - Conversations are persisted server-side in `data/conversations.json` and mirrored to browser localStorage. Optional in-memory-session password authentication is controlled by `AUTH_ENABLED` and `AUTH_PASSWORD`.
 - Remote updates and manual service restart are opt-in (`UPDATE_ENABLED=false` by default). The System page can run a fixed fast-forward-only pull, install, restart, and version check; after a successful action the page waits for the service and reloads with a cache-busting URL. WinSW receives a non-zero restart exit code; arbitrary shell commands are never accepted.
 - The top bar and System page compare the Git commit embedded in the browser bundle with the commit reported by the running server. A mismatch means the browser is serving a stale bundle or the server was built from a different commit.

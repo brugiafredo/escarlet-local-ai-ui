@@ -85,32 +85,37 @@ export const useAppStore = defineStore("app", () => {
       endAction();
     }
   }
-  async function downloadOllamaModel(modelName: string): Promise<void> {
+  async function downloadModel(providerId: ProviderId, modelName: string): Promise<void> {
     const name = modelName.trim();
     if (!name) {
-      actionError.value = "Enter an Ollama model name first.";
+      actionError.value = providerId === "ollama" ? "Enter an Ollama model name first." : "Enter an LM Studio model key first.";
       return;
     }
-    const model = { provider: "ollama" as const, id: name };
+    const model = { provider: providerId, id: name };
     const ui = useUiStore();
     beginAction(model, "download");
     try {
-      await api.downloadModel("ollama", name);
+      await api.downloadModel(providerId, name);
       await refresh();
       ui.showToast(`${name} downloaded`, "success");
     } catch (error) {
-      setActionError(error instanceof ApiError ? error.message : "Unable to download Ollama model");
+      setActionError(error instanceof ApiError ? error.message : `Unable to download ${providerId === "ollama" ? "Ollama" : "LM Studio"} model`);
     } finally {
       endAction();
     }
   }
-  async function deleteOllamaModel(model: ModelInfo): Promise<void> {
-    if (model.provider !== "ollama") return;
+  async function downloadOllamaModel(modelName: string): Promise<void> {
+    await downloadModel("ollama", modelName);
+  }
+  async function downloadLmStudioModel(modelName: string): Promise<void> {
+    await downloadModel("lmstudio", modelName);
+  }
+  async function deleteProviderModel(model: ModelInfo): Promise<void> {
     const wasSelected = selectedKey.value === modelKey(model);
     const ui = useUiStore();
     beginAction(model, "delete");
     try {
-      await api.deleteModel("ollama", model.id);
+      await api.deleteModel(model.provider, model.id);
       if (wasSelected) selectedKey.value = null;
       await refresh();
       if (wasSelected) {
@@ -118,7 +123,7 @@ export const useAppStore = defineStore("app", () => {
         const conversationStore = useConversationStore();
         if (replacement) {
           for (const conversation of conversationStore.conversations) {
-            if (conversation.provider === "ollama" && conversation.model === model.id) {
+            if (conversation.provider === model.provider && conversation.model === model.id) {
               conversationStore.updateConversation(conversation.id, { provider: replacement.provider, model: replacement.id });
             }
           }
@@ -126,10 +131,18 @@ export const useAppStore = defineStore("app", () => {
       }
       ui.showToast(`${model.name} deleted`, "success");
     } catch (error) {
-      setActionError(error instanceof ApiError ? error.message : "Unable to delete Ollama model");
+      setActionError(error instanceof ApiError ? error.message : `Unable to delete ${model.provider === "ollama" ? "Ollama" : "LM Studio"} model`);
     } finally {
       endAction();
     }
+  }
+  async function deleteOllamaModel(model: ModelInfo): Promise<void> {
+    if (model.provider !== "ollama") return;
+    await deleteProviderModel(model);
+  }
+  async function deleteLmStudioModel(model: ModelInfo): Promise<void> {
+    if (model.provider !== "lmstudio") return;
+    await deleteProviderModel(model);
   }
   function beginAction(model: Pick<ModelInfo, "provider" | "id">, operation: ModelOperation): void {
     actionKey.value = modelKey(model);
@@ -148,5 +161,5 @@ export const useAppStore = defineStore("app", () => {
     return actionKey.value === modelKey(model);
   }
 
-  return { providers, models, loadingModels, serverOnline, actionKey, actionOperation, actionError, selectedModel, onlineProviders, modelKey, selectModel, provider, setServerOnline, refresh, load, unload, downloadOllamaModel, deleteOllamaModel, isBusy };
+  return { providers, models, loadingModels, serverOnline, actionKey, actionOperation, actionError, selectedModel, onlineProviders, modelKey, selectModel, provider, setServerOnline, refresh, load, unload, downloadOllamaModel, downloadLmStudioModel, deleteOllamaModel, deleteLmStudioModel, isBusy };
 });

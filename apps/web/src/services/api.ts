@@ -43,12 +43,12 @@ export const api = {
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ provider, model }),
   }),
-  downloadModel: (provider: "ollama", model: string) => request<{ ok: true; model?: string }>("/api/models/download", {
+  downloadModel: (provider: ModelInfo["provider"], model: string) => request<{ ok: true; model?: string }>("/api/models/download", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ provider, model }),
   }),
-  deleteModel: (provider: "ollama", model: string) => request<{ ok: true }>("/api/models/delete", {
+  deleteModel: (provider: ModelInfo["provider"], model: string) => request<{ ok: true }>("/api/models/delete", {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({ provider, model }),

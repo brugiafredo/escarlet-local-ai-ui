@@ -42,7 +42,7 @@ class ToolProvider extends TestProvider {
 
 class FixedSystemService extends SystemService {
   override async snapshot(): Promise<SystemInfo> {
-    return { cpu: { usagePercent: 12, cores: 8 }, memory: { usedBytes: 2, totalBytes: 4, usagePercent: 50 }, gpu: [], operatingSystem: "Test OS", uptimeSeconds: 10, capturedAt: new Date(0).toISOString() };
+    return { cpu: { usagePercent: 12, cores: 8 }, memory: { usedBytes: 2, totalBytes: 4, usagePercent: 50 }, gpu: [], nvidia: { present: false, active: false, source: "none" }, operatingSystem: "Test OS", uptimeSeconds: 10, capturedAt: new Date(0).toISOString() };
   }
 }
 

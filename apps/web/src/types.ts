@@ -107,10 +107,25 @@ export interface ChatStreamChunk {
   done?: boolean;
 }
 
+export interface GpuInfo {
+  name: string;
+  vendor: string | null;
+  nvidia: boolean;
+  memoryUsedBytes: number | null;
+  memoryTotalBytes: number | null;
+  usagePercent: number | null;
+  active: boolean;
+}
+
 export interface SystemInfo {
   cpu: { usagePercent: number | null; cores: number | null };
   memory: { usedBytes: number | null; totalBytes: number | null; usagePercent: number | null };
-  gpu: Array<{ name: string; memoryUsedBytes: number | null; memoryTotalBytes: number | null; usagePercent: number | null }>;
+  gpu: GpuInfo[];
+  nvidia: {
+    present: boolean;
+    active: boolean;
+    source: "nvidia-smi" | "system" | "none";
+  };
   operatingSystem: string;
   uptimeSeconds: number | null;
   capturedAt: string;

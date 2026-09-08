@@ -4,6 +4,7 @@ import { api } from "../services/api";
 import { RouterLink, RouterView, useRoute, useRouter } from "vue-router";
 import { useAppStore } from "../stores/app";
 import { useConversationStore } from "../stores/conversations";
+import { useSystemStore } from "../stores/system";
 import { useUiStore } from "../stores/ui";
 import { useAuthStore } from "../stores/auth";
 import type { ServerVersion } from "../types";
@@ -11,6 +12,7 @@ import ToastHost from "./ToastHost.vue";
 
 const app = useAppStore();
 const conversations = useConversationStore();
+const system = useSystemStore();
 const ui = useUiStore();
 const auth = useAuthStore();
 const route = useRoute();
@@ -39,6 +41,33 @@ const versionTitle = computed(() => {
   if (!serverVersion.value) return `UI bundle ${clientCommit}; server version unavailable`;
   return `UI bundle: ${clientCommit}\nServer source: ${serverVersion.value.commit} (${serverVersion.value.branch})\nServer process: ${serverVersion.value.runningCommit}\nServer UI build: ${serverBuildCommit.value}\nBoot: ${serverVersion.value.bootId}`;
 });
+const metricsTitle = computed(() => {
+  const snapshot = system.info;
+  if (!snapshot) return "Host telemetry unavailable";
+  const gpu = system.primaryGpu;
+  const nvidia = snapshot.nvidia.present
+    ? (snapshot.nvidia.active ? "NVIDIA active" : "NVIDIA idle")
+    : "No NVIDIA GPU";
+  const gpuLine = gpu
+    ? `${gpu.name}${gpu.usagePercent === null ? "" : ` · GPU ${gpu.usagePercent}%`}${gpu.memoryUsedBytes === null || gpu.memoryTotalBytes === null ? "" : ` · VRAM ${formatBytes(gpu.memoryUsedBytes)} / ${formatBytes(gpu.memoryTotalBytes)}`}`
+    : "No GPU data";
+  return `CPU ${formatPercent(snapshot.cpu.usagePercent)}\nRAM ${formatPercent(snapshot.memory.usagePercent)}\n${gpuLine}\n${nvidia}`;
+});
+
+function formatPercent(value: number | null): string {
+  return value === null ? "—" : `${value}%`;
+}
+function formatBytes(bytes: number | null): string {
+  if (bytes === null) return "—";
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  let value = bytes;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value.toFixed(value >= 10 || unit === 0 ? 0 : 1)} ${units[unit]}`;
+}
 
 async function refreshVersion(): Promise<void> {
   try {
@@ -49,6 +78,7 @@ async function refreshVersion(): Promise<void> {
 }
 
 onMounted(async () => {
+  system.startPolling(3_000);
   await conversations.hydrateRemote();
   await app.refresh();
   refreshTimer = window.setInterval(() => void app.refresh(), 15_000);
@@ -58,6 +88,7 @@ onMounted(() => {
   versionTimer = window.setInterval(() => void refreshVersion(), 60_000);
 });
 onUnmounted(() => {
+  system.stopPolling();
   if (refreshTimer !== undefined) {
     window.clearInterval(refreshTimer);
   }
@@ -154,6 +185,15 @@ function removeConversation(id: string): void {
           </div>
         </div>
         <div class="ml-auto flex items-center gap-2 sm:gap-3">
+          <div class="host-metrics" :title="metricsTitle" aria-label="Host resource usage">
+            <span class="host-metric host-metric-priority"><span class="host-metric-label">CPU</span>{{ formatPercent(system.info?.cpu.usagePercent ?? null) }}</span>
+            <span class="host-metric"><span class="host-metric-label">RAM</span>{{ formatPercent(system.info?.memory.usagePercent ?? null) }}</span>
+            <span class="host-metric host-metric-priority"><span class="host-metric-label">VRAM</span>{{ formatPercent(system.vramUsagePercent) }}</span>
+            <span class="host-metric"><span class="host-metric-label">GPU</span>{{ formatPercent(system.primaryGpu?.usagePercent ?? null) }}</span>
+            <span class="host-metric nvidia-metric" :class="system.info?.nvidia.active ? 'nvidia-active' : system.info?.nvidia.present ? 'nvidia-idle' : 'nvidia-missing'">
+              <span class="host-metric-label">NV</span>{{ system.info?.nvidia.active ? 'On' : system.info?.nvidia.present ? 'Idle' : '—' }}
+            </span>
+          </div>
           <div class="hidden items-center gap-3 sm:flex" aria-label="Provider status">
             <span v-for="provider in app.providers" :key="provider.id" class="status-pill" :title="provider.message || `${provider.name} ${provider.online ? 'online' : 'offline'}`">
               <span class="status-dot" :class="provider.online ? 'online' : 'offline'" aria-hidden="true" />
